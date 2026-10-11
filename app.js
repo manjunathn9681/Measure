@@ -790,30 +790,35 @@ class MeasureApp {
     statusDot.classList.add('checking');
     statusText.textContent = 'Checking WebXR support…';
 
-    const supported = await this._checkWebXR();
+    const { arSupported, hitTestSupported } = await this._checkWebXR();
 
-    if (supported) {
+    if (arSupported) {
       statusDot.className = 'status-dot supported';
-      statusText.textContent = 'WebXR AR Ready!';
+      statusText.textContent = hitTestSupported
+        ? 'WebXR AR + Hit-Test Ready ✓'
+        : 'WebXR AR Ready (limited hit-test)';
       startBtn.disabled = false;
       startBtn.addEventListener('click', () => this._startAR());
     } else {
       statusDot.className = 'status-dot unsupported';
-      statusText.textContent = 'WebXR not available — use Demo Mode';
+      statusText.textContent = 'WebXR not available on this device/browser';
       startBtn.disabled = true;
     }
 
     statusDot.classList.remove('checking');
-
     demoBtn.addEventListener('click', () => this._startDemo());
   }
 
+  /** Returns { arSupported, hitTestSupported } */
   async _checkWebXR() {
-    if (!navigator.xr) return false;
+    if (!navigator.xr) return { arSupported: false, hitTestSupported: false };
     try {
-      return await navigator.xr.isSessionSupported('immersive-ar');
+      const arSupported = await navigator.xr.isSessionSupported('immersive-ar');
+      // We optimistically assume hit-test is available if AR is supported.
+      // The actual _startAR() will fall back gracefully if it's not.
+      return { arSupported, hitTestSupported: arSupported };
     } catch {
-      return false;
+      return { arSupported: false, hitTestSupported: false };
     }
   }
 
@@ -827,38 +832,94 @@ class MeasureApp {
   async _startAR() {
     this._hideSplash();
 
+    // Strategy 1: hit-test as required feature (ideal path)
+    let session = null;
+    let hitTestAvailable = true;
+
     try {
-      const session = await navigator.xr.requestSession('immersive-ar', {
+      session = await navigator.xr.requestSession('immersive-ar', {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay', 'light-estimation'],
         domOverlay: { root: document.getElementById('hud') },
       });
-
-      this._xrSession = session;
-      this._isAR      = true;
-
-      this._scene.renderer.xr.setReferenceSpaceType('local');
-      await this._scene.renderer.xr.setSession(session);
-
-      session.addEventListener('end', () => this._onSessionEnd());
-
-      // Request hit-test source
-      const viewerSpace = await session.requestReferenceSpace('viewer');
-      this._hitTestSrc  = await session.requestHitTestSource({ space: viewerSpace });
-
-      this._scene.renderer.xr.addEventListener('sessionstart', () => {
-        this._hud.show();
-        this._hud.setHint('Move your phone to detect a surface…');
-      });
-
-      // Tap to add point via 'select' event
-      session.addEventListener('select', () => this._addPoint());
-
-      this._scene.renderer.setAnimationLoop((t, frame) => this._renderAR(t, frame));
-
-    } catch (err) {
-      this._showError('AR Session Failed', err.message || 'Could not start AR. Ensure camera permissions are granted.');
+    } catch (_) {
+      // Strategy 2: hit-test as optional (device supports AR but not hit-test natively)
+      hitTestAvailable = false;
+      try {
+        session = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: [],
+          optionalFeatures: ['hit-test', 'dom-overlay', 'light-estimation'],
+          domOverlay: { root: document.getElementById('hud') },
+        });
+        showToast('AR started — surface detection limited on this device');
+      } catch (err2) {
+        // Strategy 3: full fallback to demo mode
+        showToast('AR unavailable — switching to Demo Mode');
+        this._startDemoFallback();
+        return;
+      }
     }
+
+    this._xrSession = session;
+    this._isAR      = true;
+
+    this._scene.renderer.xr.setReferenceSpaceType('local');
+    await this._scene.renderer.xr.setSession(session);
+
+    session.addEventListener('end', () => this._onSessionEnd());
+
+    // Request hit-test source only if the feature was enabled
+    try {
+      const viewerSpace  = await session.requestReferenceSpace('viewer');
+      this._hitTestSrc   = await session.requestHitTestSource({ space: viewerSpace });
+      hitTestAvailable   = true;
+    } catch (_) {
+      this._hitTestSrc  = null;
+      hitTestAvailable  = false;
+      showToast('Surface detection unavailable — tap freely to place points');
+    }
+
+    this._scene.renderer.xr.addEventListener('sessionstart', () => {
+      this._hud.show();
+      if (hitTestAvailable) {
+        this._hud.setHint('Move your phone to detect a surface…');
+      } else {
+        this._hud.setHint('Tap anywhere to place measurement points', false);
+        // Without hit-test, reticle stays visible at a fixed forward distance
+        this._reticle.visible = true;
+      }
+    });
+
+    // Tap to add point via 'select' event
+    session.addEventListener('select', () => {
+      if (!hitTestAvailable) {
+        // Place at a fixed depth in front of the camera
+        const cam    = this._scene.camera;
+        const dir    = new THREE.Vector3(0, 0, -0.5).applyQuaternion(cam.quaternion);
+        const fixPos = cam.position.clone().add(dir);
+        this._measurements.placePin(fixPos);
+        this._reticle.updateFromPosition(fixPos);
+      } else {
+        this._addPoint();
+      }
+    });
+
+    this._scene.renderer.setAnimationLoop((t, frame) => this._renderAR(t, frame));
+  }
+
+  /** Silently fall into demo mode (called when all AR strategies fail) */
+  _startDemoFallback() {
+    // Re-show splash briefly so user sees the fallback message, then auto-start demo
+    const splash = document.getElementById('splash-screen');
+    splash.classList.remove('hidden', 'fade-out');
+
+    // Update status indicator
+    const dot  = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    dot.className  = 'status-dot demo';
+    text.textContent = 'AR not supported — switching to Demo Mode…';
+
+    setTimeout(() => this._startDemo(), 1800);
   }
 
   /* ── Start Demo Mode ─────────────────────────────────────────────────── */
@@ -1028,10 +1089,31 @@ class MeasureApp {
     document.getElementById('error-title').textContent   = title;
     document.getElementById('error-message').textContent = msg;
     document.getElementById('error-overlay').classList.remove('hidden');
+
+    // "Got It" dismisses and returns to splash so user can try Demo Mode
     document.getElementById('error-dismiss-btn').addEventListener('click', () => {
       document.getElementById('error-overlay').classList.add('hidden');
+      const splash = document.getElementById('splash-screen');
+      splash.classList.remove('hidden', 'fade-out');
     }, { once: true });
+
+    // Inject "Use Demo Mode" shortcut directly in the error card
+    const card = document.querySelector('.error-card');
+    let demoShortcut = card.querySelector('#error-demo-btn');
+    if (!demoShortcut) {
+      demoShortcut = document.createElement('button');
+      demoShortcut.id        = 'error-demo-btn';
+      demoShortcut.className = 'demo-btn';
+      demoShortcut.style.cssText = 'margin-top:0; width:100%';
+      demoShortcut.innerHTML = '<span>Use Demo Mode instead</span>';
+      card.appendChild(demoShortcut);
+    }
+    demoShortcut.onclick = () => {
+      document.getElementById('error-overlay').classList.add('hidden');
+      this._startDemo();
+    };
   }
+
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
