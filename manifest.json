@@ -1,0 +1,20 @@
+{
+  "name": "Measure — WebAR Ruler",
+  "short_name": "Measure",
+  "description": "Measure real-world distances using WebAR and your camera",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#FF3B30",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='115' fill='%23FF3B30'/><line x1='100' y1='412' x2='412' y2='100' stroke='white' stroke-width='30' stroke-linecap='round'/><circle cx='100' cy='412' r='38' fill='white'/><circle cx='412' cy='100' r='38' fill='white'/></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable any"
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "lang": "en-US"
+}
