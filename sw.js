@@ -3,13 +3,13 @@
  * Caches core assets for offline access and HTTPS context.
  */
 
-const CACHE_NAME = 'measure-ar-v1';
+const CACHE_NAME = 'measure-ar-v2';
 const CORE_ASSETS = [
-  '/',
-  '/index.html',
-  '/style.css',
-  '/app.js',
-  '/manifest.json',
+  './',
+  './index.html',
+  './style.css',
+  './app.js',
+  './manifest.json',
 ];
 
 /* Install: pre-cache core assets */

@@ -564,18 +564,20 @@ class MeasurementManager {
    Drives the UI state machine and DOM updates.
    ══════════════════════════════════════════════════════════════════════════ */
 class HUDManager {
-  constructor(onAddPoint, onClear, onUndo, onClose, onScreenshot) {
+  constructor(onAddPoint, onClear, onUndo, onClose, onScreenshot, onModeChange) {
     this._onAddPoint   = onAddPoint;
     this._onClear      = onClear;
     this._onUndo       = onUndo;
     this._onClose      = onClose;
     this._onScreenshot = onScreenshot;
+    this._onModeChange = onModeChange;
 
     /* DOM refs */
     this._hud             = document.getElementById('hud');
     this._hintBar         = document.getElementById('hint-bar');
     this._hintText        = document.getElementById('hint-text');
     this._hintSpinner     = this._hintBar.querySelector('.hint-spinner');
+    this._modeBar         = document.getElementById('mode-bar');
     this._distPanel       = document.getElementById('distance-panel');
     this._distCm          = document.getElementById('dist-cm');
     this._distIn          = document.getElementById('dist-in');
@@ -599,10 +601,32 @@ class HUDManager {
     this._undoBtn.addEventListener('click',       () => this._onUndo());
     this._closeBtn.addEventListener('click',      () => this._onClose());
     this._screenshotBtn.addEventListener('click', () => this._onScreenshot());
+
+    // Surface / Height Mode Pills
+    const modePills = document.querySelectorAll('.mode-pill');
+    modePills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        modePills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        const mode = pill.dataset.mode;
+        const height = parseFloat(pill.dataset.height);
+        if (this._onModeChange) this._onModeChange(mode, height);
+      });
+    });
   }
 
   show()  { this._hud.classList.remove('hidden'); }
   hide()  { this._hud.classList.add('hidden'); }
+
+  showModeBar(show) {
+    if (this._modeBar) {
+      if (show) {
+        this._modeBar.classList.remove('hidden');
+      } else {
+        this._modeBar.classList.add('hidden');
+      }
+    }
+  }
 
   /** Update the hint text */
   setHint(text, spinning = true) {
@@ -678,17 +702,17 @@ class HUDManager {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   DEMO MODE  (Desktop / non-AR fallback)
+   DEMO MODE  (Desktop / mouse raycasting fallback)
    Uses mouse raycasting against a virtual floor plane.
    ══════════════════════════════════════════════════════════════════════════ */
 class DemoMode {
   constructor(camera, scene) {
-    this._camera   = camera;
-    this._scene    = scene;
+    this._camera    = camera;
+    this._scene     = scene;
     this._raycaster = new THREE.Raycaster();
-    this._mouse    = new THREE.Vector2(-9999, -9999);
-    this._floor    = this._buildFloor();
-    this._active   = false;
+    this._mouse     = new THREE.Vector2(-9999, -9999);
+    this._floor     = this._buildFloor();
+    this._active    = false;
 
     this._onMouseMove  = this._onMouseMove.bind(this);
     this._onTouchMove  = this._onTouchMove.bind(this);
@@ -729,6 +753,10 @@ class DemoMode {
     this._active = false;
     window.removeEventListener('mousemove',  this._onMouseMove);
     window.removeEventListener('touchmove',  this._onTouchMove);
+    if (this._grid) {
+      this._scene.remove(this._grid);
+      this._grid = null;
+    }
   }
 
   _onMouseMove(e) {
@@ -754,30 +782,275 @@ class DemoMode {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   UNIVERSAL CAMERA MODE (Works on ALL phones without WebXR)
+   Uses getUserMedia for live video feed + device orientation / touch raycasting
+   against a calibrated ground/surface plane.
+   ══════════════════════════════════════════════════════════════════════════ */
+class UniversalCameraMode {
+  constructor(camera, scene, canvas, onSurfaceTap) {
+    this._camera       = camera;
+    this._scene        = scene;
+    this._canvas       = canvas;
+    this._video        = document.getElementById('camera-video');
+    this._onSurfaceTap = onSurfaceTap;
+
+    this._active       = false;
+    this._stream       = null;
+
+    // Height & Mode settings
+    this._cameraHeight = 1.30; // metres (standing floor height default)
+    this._mode         = 'floor'; // 'floor' | 'table' | 'wall'
+
+    // Sensors
+    this._hasOrientation    = false;
+    this._initialAlpha       = null;
+    this._deviceOrientation  = { alpha: 0, beta: 0, gamma: 0 };
+
+    // Manual touch adjustment / aiming
+    this._touchAim       = new THREE.Vector2(0, 0); // screen center by default
+    this._touchStartPos  = { x: 0, y: 0, time: 0 };
+    this._manualYaw      = 0;
+    this._manualPitch    = 0;
+
+    // Raycaster
+    this._raycaster      = new THREE.Raycaster();
+
+    // Event bindings
+    this._onOrientation = this._onOrientation.bind(this);
+    this._onTouchStart  = this._onTouchStart.bind(this);
+    this._onTouchMove   = this._onTouchMove.bind(this);
+    this._onTouchEnd    = this._onTouchEnd.bind(this);
+  }
+
+  setMode(mode, height) {
+    this._mode = mode;
+    if (height) this._cameraHeight = height;
+  }
+
+  async activate() {
+    this._active = true;
+    this._scene.background = null; // transparent canvas to show video
+    this._scene.fog = null;
+
+    // Reset camera position
+    this._camera.position.set(0, this._cameraHeight, 0);
+    this._camera.lookAt(0, 0, -2);
+
+    // Request camera stream (environment / back camera preferred)
+    try {
+      this._stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
+      });
+      this._video.srcObject = this._stream;
+      this._video.style.display = 'block';
+      await this._video.play();
+    } catch (err) {
+      console.warn('Camera error:', err);
+      throw err;
+    }
+
+    // Request iOS orientation permission if required
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        const res = await DeviceOrientationEvent.requestPermission();
+        if (res === 'granted') {
+          window.addEventListener('deviceorientation', this._onOrientation, true);
+        }
+      } catch (e) {
+        console.warn('Orientation permission not granted:', e);
+      }
+    } else if ('ondeviceorientation' in window) {
+      window.addEventListener('deviceorientation', this._onOrientation, true);
+    }
+
+    // Touch listeners on canvas
+    this._canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
+    this._canvas.addEventListener('touchmove',  this._onTouchMove,  { passive: false });
+    this._canvas.addEventListener('touchend',   this._onTouchEnd,   { passive: false });
+  }
+
+  deactivate() {
+    this._active = false;
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop());
+      this._stream = null;
+    }
+    if (this._video) {
+      this._video.pause();
+      this._video.srcObject = null;
+      this._video.style.display = 'none';
+    }
+    window.removeEventListener('deviceorientation', this._onOrientation, true);
+    this._canvas.removeEventListener('touchstart', this._onTouchStart);
+    this._canvas.removeEventListener('touchmove',  this._onTouchMove);
+    this._canvas.removeEventListener('touchend',   this._onTouchEnd);
+  }
+
+  _onOrientation(e) {
+    if (e.beta !== null && e.beta !== undefined) {
+      this._hasOrientation = true;
+      this._deviceOrientation.alpha = e.alpha ?? 0;
+      this._deviceOrientation.beta  = e.beta  ?? 90;
+      this._deviceOrientation.gamma = e.gamma ?? 0;
+    }
+  }
+
+  _onTouchStart(e) {
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      this._touchStartPos = { x: t.clientX, y: t.clientY, time: Date.now() };
+    }
+  }
+
+  _onTouchMove(e) {
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      const dx = t.clientX - this._touchStartPos.x;
+      const dy = t.clientY - this._touchStartPos.y;
+
+      // Update manual pan if moving significantly
+      if (Math.hypot(dx, dy) > 10) {
+        this._manualYaw -= dx * 0.05;
+        this._manualPitch -= dy * 0.05;
+        this._touchStartPos.x = t.clientX;
+        this._touchStartPos.y = t.clientY;
+      }
+    }
+  }
+
+  _onTouchEnd(e) {
+    const elapsed = Date.now() - this._touchStartPos.time;
+    // If it was a quick tap with minimal movement (< 15px, < 350ms)
+    if (elapsed < 350 && e.changedTouches.length === 1) {
+      const t = e.changedTouches[0];
+      const dx = t.clientX - this._touchStartPos.x;
+      const dy = t.clientY - this._touchStartPos.y;
+      if (Math.hypot(dx, dy) < 15) {
+        if (this._onSurfaceTap) {
+          this._onSurfaceTap();
+        }
+      }
+    }
+  }
+
+  update() {
+    if (!this._active) return;
+
+    if (this._hasOrientation) {
+      const alpha = this._deviceOrientation.alpha;
+      const beta  = this._deviceOrientation.beta;
+      const gamma = this._deviceOrientation.gamma;
+
+      if (this._initialAlpha === null) {
+        this._initialAlpha = alpha;
+      }
+      const relAlpha = alpha - this._initialAlpha + this._manualYaw;
+      const relBeta  = beta + this._manualPitch;
+
+      this._setCameraQuaternion(relAlpha, relBeta, gamma);
+    } else {
+      // Manual orientation fallback
+      const euler = new THREE.Euler(
+        THREE.MathUtils.degToRad(this._manualPitch - 35),
+        THREE.MathUtils.degToRad(this._manualYaw),
+        0,
+        'YXZ'
+      );
+      this._camera.quaternion.setFromEuler(euler);
+    }
+
+    this._camera.position.set(0, this._cameraHeight, 0);
+  }
+
+  _setCameraQuaternion(alphaDeg, betaDeg, gammaDeg) {
+    const degToRad = Math.PI / 180;
+    // Phone held in portrait:
+    // beta = 90 means vertical (pointing at horizon).
+    // beta < 90 means tilting down toward floor.
+    const pitch = (betaDeg - 90) * degToRad;
+    const yaw   = -alphaDeg * degToRad;
+    const roll  = -gammaDeg * degToRad;
+
+    const euler = new THREE.Euler(pitch, yaw, roll, 'YXZ');
+    this._camera.quaternion.setFromEuler(euler);
+  }
+
+  getHitPoint() {
+    if (!this._active) return null;
+
+    // Raycast straight through screen center
+    this._raycaster.setFromCamera(this._touchAim, this._camera);
+    const ray = this._raycaster.ray;
+
+    if (this._mode === 'floor' || this._mode === 'table') {
+      const planeY = 0; // Surface plane at y = 0
+      if (ray.direction.y < -0.015) {
+        const t = (planeY - ray.origin.y) / ray.direction.y;
+        if (t > 0 && t < 25) {
+          return ray.origin.clone().add(ray.direction.clone().multiplyScalar(t));
+        }
+      }
+      // If looking slightly forward/above horizon, project 1.5m ahead
+      return ray.origin.clone().add(ray.direction.clone().multiplyScalar(1.5));
+    } else {
+      // Object/Wall mode: 1.0m plane
+      return ray.origin.clone().add(ray.direction.clone().multiplyScalar(1.0));
+    }
+  }
+
+  getVideo() { return this._video; }
+  isActive() { return this._active; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    MAIN APP
    ══════════════════════════════════════════════════════════════════════════ */
 class MeasureApp {
   constructor() {
-    this._canvas      = document.getElementById('ar-canvas');
-    this._scene       = new SceneManager(this._canvas);
-    this._reticle     = new ReticleManager(this._scene.scene);
+    this._canvas       = document.getElementById('ar-canvas');
+    this._scene        = new SceneManager(this._canvas);
+    this._reticle      = new ReticleManager(this._scene.scene);
     this._measurements = new MeasurementManager(this._scene.scene);
-    this._demoMode    = new DemoMode(this._scene.camera, this._scene.scene);
+    this._demoMode     = new DemoMode(this._scene.camera, this._scene.scene);
+    this._cameraMode   = new UniversalCameraMode(
+      this._scene.camera,
+      this._scene.scene,
+      this._canvas,
+      () => this._addPoint()
+    );
 
-    this._xrSession   = null;
-    this._hitTestSrc  = null;
-    this._isAR        = false;
-    this._clock       = new THREE.Clock();
+    this._xrSession    = null;
+    this._hitTestSrc   = null;
+    this._activeMode   = null; // 'xr' | 'camera' | 'demo'
+    this._clock        = new THREE.Clock();
 
     this._hud = new HUDManager(
       () => this._addPoint(),
       () => this._clearAll(),
       () => this._undo(),
       () => this._exitAR(),
-      () => this._screenshot()
+      () => this._screenshot(),
+      (mode, height) => this._onModeChange(mode, height)
     );
 
     this._initSplash();
+  }
+
+  _onModeChange(mode, height) {
+    if (this._cameraMode) {
+      this._cameraMode.setMode(mode, height);
+      const labels = {
+        floor: '🏢 Floor Mode (1.3m)',
+        table: '🪑 Table Mode (0.6m)',
+        wall:  '📦 Object Mode (1m)',
+      };
+      showToast(labels[mode] || 'Surface Mode Updated');
+    }
   }
 
   /* ── Splash / Permission Screen ─────────────────────────────────────── */
@@ -788,25 +1061,29 @@ class MeasureApp {
     const demoBtn    = document.getElementById('start-demo-btn');
 
     statusDot.classList.add('checking');
-    statusText.textContent = 'Checking WebXR support…';
+    statusText.textContent = 'Checking device capabilities…';
 
     const { arSupported, hitTestSupported } = await this._checkWebXR();
+    statusDot.classList.remove('checking');
 
     if (arSupported) {
       statusDot.className = 'status-dot supported';
       statusText.textContent = hitTestSupported
         ? 'WebXR AR + Hit-Test Ready ✓'
-        : 'WebXR AR Ready (limited hit-test)';
+        : 'WebXR AR Ready';
       startBtn.disabled = false;
-      startBtn.addEventListener('click', () => this._startAR());
+      startBtn.innerHTML = '<span class="btn-icon">⬤</span><span>Start AR Measuring</span>';
+      startBtn.onclick = () => this._startAR();
     } else {
-      statusDot.className = 'status-dot unsupported';
-      statusText.textContent = 'WebXR not available on this device/browser';
-      startBtn.disabled = true;
+      // Universal Camera Mode for all other devices (iOS Safari, standard Android, tablets)
+      statusDot.className = 'status-dot supported';
+      statusText.textContent = 'Camera Measure Mode Ready ✓';
+      startBtn.disabled = false;
+      startBtn.innerHTML = '<span class="btn-icon">📷</span><span>Start Measuring</span>';
+      startBtn.onclick = () => this._startCameraMode();
     }
 
-    statusDot.classList.remove('checking');
-    demoBtn.addEventListener('click', () => this._startDemo());
+    demoBtn.onclick = () => this._startDemo();
   }
 
   /** Returns { arSupported, hitTestSupported } */
@@ -814,8 +1091,6 @@ class MeasureApp {
     if (!navigator.xr) return { arSupported: false, hitTestSupported: false };
     try {
       const arSupported = await navigator.xr.isSessionSupported('immersive-ar');
-      // We optimistically assume hit-test is available if AR is supported.
-      // The actual _startAR() will fall back gracefully if it's not.
       return { arSupported, hitTestSupported: arSupported };
     } catch {
       return { arSupported: false, hitTestSupported: false };
@@ -828,11 +1103,32 @@ class MeasureApp {
     setTimeout(() => splash.classList.add('hidden'), 550);
   }
 
+  /* ── Start Universal Camera Mode (Works on ALL phones) ──────────────── */
+  async _startCameraMode() {
+    this._hideSplash();
+
+    try {
+      await this._cameraMode.activate();
+      this._activeMode = 'camera';
+
+      this._hud.show();
+      this._hud.showModeBar(true);
+      this._hud.setHint('Aim at surface & tap Add Point', false);
+      this._reticle.visible = true;
+
+      showToast('Camera Active — tap Add Point to measure');
+      this._scene.renderer.setAnimationLoop((t) => this._renderCamera(t));
+    } catch (err) {
+      console.error('Camera mode error:', err);
+      showToast('Camera access unavailable — opening Demo Mode');
+      this._startDemo();
+    }
+  }
+
   /* ── Start WebXR AR Session ──────────────────────────────────────────── */
   async _startAR() {
     this._hideSplash();
 
-    // Strategy 1: hit-test as required feature (ideal path)
     let session = null;
     let hitTestAvailable = true;
 
@@ -843,7 +1139,6 @@ class MeasureApp {
         domOverlay: { root: document.getElementById('hud') },
       });
     } catch (_) {
-      // Strategy 2: hit-test as optional (device supports AR but not hit-test natively)
       hitTestAvailable = false;
       try {
         session = await navigator.xr.requestSession('immersive-ar', {
@@ -853,47 +1148,44 @@ class MeasureApp {
         });
         showToast('AR started — surface detection limited on this device');
       } catch (err2) {
-        // Strategy 3: full fallback to demo mode
-        showToast('AR unavailable — switching to Demo Mode');
-        this._startDemoFallback();
+        // Full graceful fallback directly to Universal Camera Mode
+        showToast('WebXR AR unavailable — switching to Camera Mode');
+        this._startCameraMode();
         return;
       }
     }
 
-    this._xrSession = session;
-    this._isAR      = true;
+    this._xrSession  = session;
+    this._activeMode = 'xr';
 
     this._scene.renderer.xr.setReferenceSpaceType('local');
     await this._scene.renderer.xr.setSession(session);
 
     session.addEventListener('end', () => this._onSessionEnd());
 
-    // Request hit-test source only if the feature was enabled
     try {
-      const viewerSpace  = await session.requestReferenceSpace('viewer');
-      this._hitTestSrc   = await session.requestHitTestSource({ space: viewerSpace });
-      hitTestAvailable   = true;
+      const viewerSpace = await session.requestReferenceSpace('viewer');
+      this._hitTestSrc  = await session.requestHitTestSource({ space: viewerSpace });
+      hitTestAvailable  = true;
     } catch (_) {
-      this._hitTestSrc  = null;
-      hitTestAvailable  = false;
-      showToast('Surface detection unavailable — tap freely to place points');
+      this._hitTestSrc = null;
+      hitTestAvailable = false;
+      showToast('Surface detection limited — tap freely to place points');
     }
 
     this._scene.renderer.xr.addEventListener('sessionstart', () => {
       this._hud.show();
+      this._hud.showModeBar(false);
       if (hitTestAvailable) {
         this._hud.setHint('Move your phone to detect a surface…');
       } else {
         this._hud.setHint('Tap anywhere to place measurement points', false);
-        // Without hit-test, reticle stays visible at a fixed forward distance
         this._reticle.visible = true;
       }
     });
 
-    // Tap to add point via 'select' event
     session.addEventListener('select', () => {
       if (!hitTestAvailable) {
-        // Place at a fixed depth in front of the camera
         const cam    = this._scene.camera;
         const dir    = new THREE.Vector3(0, 0, -0.5).applyQuaternion(cam.quaternion);
         const fixPos = cam.position.clone().add(dir);
@@ -907,36 +1199,48 @@ class MeasureApp {
     this._scene.renderer.setAnimationLoop((t, frame) => this._renderAR(t, frame));
   }
 
-  /** Silently fall into demo mode (called when all AR strategies fail) */
-  _startDemoFallback() {
-    // Re-show splash briefly so user sees the fallback message, then auto-start demo
-    const splash = document.getElementById('splash-screen');
-    splash.classList.remove('hidden', 'fade-out');
-
-    // Update status indicator
-    const dot  = document.getElementById('status-dot');
-    const text = document.getElementById('status-text');
-    dot.className  = 'status-dot demo';
-    text.textContent = 'AR not supported — switching to Demo Mode…';
-
-    setTimeout(() => this._startDemo(), 1800);
-  }
-
   /* ── Start Demo Mode ─────────────────────────────────────────────────── */
   _startDemo() {
     this._hideSplash();
     this._demoMode.activate();
-    this._isAR = false;
+    this._activeMode = 'demo';
 
     this._hud.show();
+    this._hud.showModeBar(true);
     this._hud.setHint('Click / tap anywhere to place measurement points', false);
 
-    // Tap / click for demo mode
-    this._canvas.addEventListener('click',     () => this._addPoint());
-    this._canvas.addEventListener('touchend',  (e) => { e.preventDefault(); this._addPoint(); }, { passive: false });
+    // Canvas click / tap listener for demo
+    this._demoClickListener = () => this._addPoint();
+    this._canvas.addEventListener('click', this._demoClickListener);
 
     showToast('Demo Mode — click to place points');
     this._scene.renderer.setAnimationLoop((t) => this._renderDemo(t));
+  }
+
+  /* ── Camera Mode Render Loop ─────────────────────────────────────────── */
+  _renderCamera(timestamp) {
+    const t = this._clock.getElapsedTime();
+    this._cameraMode.update();
+
+    const hit = this._cameraMode.getHitPoint();
+    if (hit) {
+      this._reticle.updateFromPosition(hit);
+      if (this._measurements.getPointCount() === 1) {
+        this._measurements.updateRubberBand(hit);
+      }
+    } else {
+      this._reticle.hide();
+    }
+
+    this._hud.update(
+      this._measurements.getPointCount(),
+      this._measurements.getLiveDistance(),
+      this._measurements.getHistory(),
+      !!hit
+    );
+
+    this._reticle.animate(t);
+    this._scene.renderer.render(this._scene.scene, this._scene.camera);
   }
 
   /* ── AR Render Loop ──────────────────────────────────────────────────── */
@@ -945,7 +1249,6 @@ class MeasureApp {
     if (!frame) return;
 
     const refSpace = this._scene.renderer.xr.getReferenceSpace();
-    const session  = this._scene.renderer.xr.getSession();
 
     if (this._hitTestSrc) {
       const results = frame.getHitTestResults(this._hitTestSrc);
@@ -961,7 +1264,6 @@ class MeasureApp {
             true
           );
 
-          // Update rubber band if first point placed
           if (this._measurements.getPointCount() === 1) {
             this._measurements.updateRubberBand(this._reticle.getCurrentPosition());
           }
@@ -1013,12 +1315,17 @@ class MeasureApp {
       return;
     }
 
+    // Haptic feedback
+    if (navigator.vibrate) {
+      navigator.vibrate([25]);
+    }
+
     const pos = this._reticle.getCurrentPosition();
     this._measurements.placePin(pos);
 
     const count = this._measurements.getPointCount();
     if (count === 1) {
-      showToast('First point placed — tap for second point');
+      showToast('Point 1 placed — tap for second point');
     } else if (count === 2) {
       const d   = this._measurements.getLiveDistance();
       const fmt = formatDistance(d);
@@ -1027,6 +1334,7 @@ class MeasureApp {
   }
 
   _undo() {
+    if (navigator.vibrate) navigator.vibrate([15]);
     const result = this._measurements.undo();
     if (result === 'none') {
       showToast('Nothing to undo');
@@ -1042,6 +1350,7 @@ class MeasureApp {
   }
 
   _clearAll() {
+    if (navigator.vibrate) navigator.vibrate([20, 40]);
     this._measurements.clearAll();
     showToast('All measurements cleared');
     this._hud.update(0, null, [], this._reticle.visible);
@@ -1051,14 +1360,44 @@ class MeasureApp {
   _screenshot() {
     try {
       this._scene.renderer.render(this._scene.scene, this._scene.camera);
-      const dataURL = this._canvas.toDataURL('image/png');
+
+      const width  = this._canvas.width;
+      const height = this._canvas.height;
+      const offscreen = document.createElement('canvas');
+      offscreen.width  = width;
+      offscreen.height = height;
+      const ctx = offscreen.getContext('2d');
+
+      // If in camera mode and video is streaming, draw camera background first
+      if (this._activeMode === 'camera' && this._cameraMode.getVideo()) {
+        const vid = this._cameraMode.getVideo();
+        if (vid.readyState >= 2) {
+          const vRatio = vid.videoWidth / vid.videoHeight;
+          const cRatio = width / height;
+          let sx = 0, sy = 0, sw = vid.videoWidth, sh = vid.videoHeight;
+          if (vRatio > cRatio) {
+            sw = vid.videoHeight * cRatio;
+            sx = (vid.videoWidth - sw) / 2;
+          } else {
+            sh = vid.videoWidth / cRatio;
+            sy = (vid.videoHeight - sh) / 2;
+          }
+          ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, width, height);
+        }
+      }
+
+      // Draw 3D measurement overlays on top
+      ctx.drawImage(this._canvas, 0, 0);
+
+      const dataURL = offscreen.toDataURL('image/png');
       const a = document.createElement('a');
       a.href     = dataURL;
       a.download = `measure-${Date.now()}.png`;
       a.click();
-      showToast('📸 Screenshot saved!');
+      showToast('📸 Photo saved with measurements!');
     } catch (err) {
-      showToast('Screenshot failed — check permissions');
+      console.error('Screenshot error:', err);
+      showToast('Photo capture failed — check permissions');
     }
   }
 
@@ -1074,14 +1413,25 @@ class MeasureApp {
   _onSessionEnd() {
     this._xrSession  = null;
     this._hitTestSrc = null;
+    this._scene.renderer.setAnimationLoop(null);
+
     this._hud.hide();
     this._measurements.clearAll();
-    this._demoMode.deactivate();
+
+    if (this._activeMode === 'camera') {
+      this._cameraMode.deactivate();
+    } else if (this._activeMode === 'demo') {
+      this._demoMode.deactivate();
+      if (this._demoClickListener) {
+        this._canvas.removeEventListener('click', this._demoClickListener);
+      }
+    }
+    this._activeMode = null;
 
     // Restore splash
     const splash = document.getElementById('splash-screen');
     splash.classList.remove('hidden', 'fade-out');
-    showToast('AR session ended');
+    showToast('Measurement ended');
   }
 
   /* ── Error Display ───────────────────────────────────────────────────── */
@@ -1090,27 +1440,25 @@ class MeasureApp {
     document.getElementById('error-message').textContent = msg;
     document.getElementById('error-overlay').classList.remove('hidden');
 
-    // "Got It" dismisses and returns to splash so user can try Demo Mode
-    document.getElementById('error-dismiss-btn').addEventListener('click', () => {
+    document.getElementById('error-dismiss-btn').onclick = () => {
       document.getElementById('error-overlay').classList.add('hidden');
       const splash = document.getElementById('splash-screen');
       splash.classList.remove('hidden', 'fade-out');
-    }, { once: true });
+    };
 
-    // Inject "Use Demo Mode" shortcut directly in the error card
     const card = document.querySelector('.error-card');
-    let demoShortcut = card.querySelector('#error-demo-btn');
-    if (!demoShortcut) {
-      demoShortcut = document.createElement('button');
-      demoShortcut.id        = 'error-demo-btn';
-      demoShortcut.className = 'demo-btn';
-      demoShortcut.style.cssText = 'margin-top:0; width:100%';
-      demoShortcut.innerHTML = '<span>Use Demo Mode instead</span>';
-      card.appendChild(demoShortcut);
+    let cameraShortcut = card.querySelector('#error-camera-btn');
+    if (!cameraShortcut) {
+      cameraShortcut = document.createElement('button');
+      cameraShortcut.id        = 'error-camera-btn';
+      cameraShortcut.className = 'start-btn';
+      cameraShortcut.style.cssText = 'margin-top:10px; width:100%';
+      cameraShortcut.innerHTML = '<span class="btn-icon">📷</span><span>Use Camera Mode</span>';
+      card.appendChild(cameraShortcut);
     }
-    demoShortcut.onclick = () => {
+    cameraShortcut.onclick = () => {
       document.getElementById('error-overlay').classList.add('hidden');
-      this._startDemo();
+      this._startCameraMode();
     };
   }
 

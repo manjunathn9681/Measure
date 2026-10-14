@@ -2,7 +2,7 @@
   "name": "Measure — WebAR Ruler",
   "short_name": "Measure",
   "description": "Measure real-world distances using WebAR and your camera",
-  "start_url": "/",
+  "start_url": "./",
   "display": "fullscreen",
   "orientation": "any",
   "background_color": "#000000",

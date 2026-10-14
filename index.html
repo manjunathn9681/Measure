@@ -66,8 +66,8 @@
             <div class="status-dot" id="status-dot"></div>
             <span id="status-text">Checking WebXR support…</span>
           </div>
-          <button id="start-ar-btn" class="start-btn" disabled>
-            <span class="btn-icon">⬤</span>
+          <button id="start-ar-btn" class="start-btn">
+            <span class="btn-icon">📷</span>
             <span>Start Measuring</span>
           </button>
           <button id="start-demo-btn" class="demo-btn">
@@ -81,6 +81,9 @@
         <p>Point at a flat surface and tap to place measurement points</p>
       </div>
     </div>
+
+    <!-- ─── Background Camera Video (for Universal Camera Mode) ───────── -->
+    <video id="camera-video" playsinline autoplay muted></video>
 
     <!-- ─── AR Canvas ─────────────────────────────────────────────────── -->
     <canvas id="ar-canvas"></canvas>
@@ -103,6 +106,22 @@
             <path d="M3 7H13C15.76 7 18 9.24 18 12C18 14.76 15.76 17 13 17H7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M6 4L3 7L6 10" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
+        </button>
+      </div>
+
+      <!-- Surface / Height Mode Selector (Universal Camera Mode & Demo) -->
+      <div id="mode-bar" class="mode-bar">
+        <button id="mode-floor" class="mode-pill active" data-mode="floor" data-height="1.30">
+          <span class="mode-icon">🏢</span>
+          <span class="mode-text">Floor (1.3m)</span>
+        </button>
+        <button id="mode-table" class="mode-pill" data-mode="table" data-height="0.60">
+          <span class="mode-icon">🪑</span>
+          <span class="mode-text">Table (0.6m)</span>
+        </button>
+        <button id="mode-wall" class="mode-pill" data-mode="wall" data-height="1.00">
+          <span class="mode-icon">📦</span>
+          <span class="mode-text">Object (1m)</span>
         </button>
       </div>
 
