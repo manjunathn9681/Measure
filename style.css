@@ -312,6 +312,16 @@ html, body {
   display: none;
 }
 
+#freeze-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+  display: none;
+}
+
 #ar-canvas {
   position: fixed;
   inset: 0;
@@ -432,6 +442,121 @@ html, body {
   letter-spacing: -0.1px;
 }
 
+.mode-pill.freeze-pill {
+  background: rgba(10, 132, 255, 0.15);
+  border-color: rgba(10, 132, 255, 0.4);
+  color: #70b4ff;
+}
+
+.mode-pill.freeze-pill.frozen {
+  background: rgba(10, 132, 255, 0.4);
+  border-color: rgba(10, 132, 255, 0.9);
+  color: #ffffff;
+  box-shadow: 0 0 16px rgba(10, 132, 255, 0.6);
+}
+
+.mode-pill.calibrate-pill {
+  background: rgba(255, 214, 10, 0.14);
+  border-color: rgba(255, 214, 10, 0.4);
+  color: #ffd60a;
+}
+
+.mode-pill.calibrate-pill.calibrated {
+  background: rgba(48, 209, 88, 0.28);
+  border-color: rgba(48, 209, 88, 0.8);
+  color: #30d158;
+  box-shadow: 0 0 14px rgba(48, 209, 88, 0.4);
+}
+
+/* ── Optical Magnifier Loupe ─────────────────────────────────────────────── */
+.magnifier-loupe {
+  position: fixed;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  border: 3.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 12px 35px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.3);
+  pointer-events: none;
+  z-index: 500;
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  background: #000;
+  transition: opacity 0.15s ease;
+}
+
+#loupe-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.loupe-crosshair {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loupe-crosshair::before,
+.loupe-crosshair::after {
+  content: '';
+  position: absolute;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.loupe-crosshair::before {
+  left: 50%;
+  top: 15%;
+  bottom: 15%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.loupe-crosshair::after {
+  top: 50%;
+  left: 15%;
+  right: 15%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.loupe-center-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ios-accent);
+  box-shadow: 0 0 8px var(--ios-accent);
+  transform: translate(-50%, -50%);
+}
+
+.loupe-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.6);
+  transform: translate(-50%, -50%);
+}
+
+.loupe-badge {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 0.5px solid rgba(255,255,255,0.25);
+}
+
 /* ── Hint Bar ─────────────────────────────────────────────────────────────── */
 .hint-bar {
   display: flex;
@@ -526,6 +651,26 @@ html, body {
   color: var(--text-secondary);
   letter-spacing: -0.5px;
   font-variant-numeric: tabular-nums;
+}
+
+.accuracy-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #30d158;
+  background: rgba(48, 209, 88, 0.15);
+  border: 1px solid rgba(48, 209, 88, 0.35);
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  margin-top: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  letter-spacing: 0.1px;
+}
+
+.accuracy-badge .badge-icon {
+  font-size: 10px;
+  font-weight: 800;
 }
 
 /* ── Measurements List ───────────────────────────────────────────────────── */
@@ -874,3 +1019,201 @@ html, body {
 }
 
 .surface-found-indicator.hidden { opacity: 0; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   100% ACCURACY CALIBRATION SHEET
+   ───────────────────────────────────────────────────────────────────────── */
+.calibration-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  animation: modalFadeIn 0.3s ease;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.calibration-card {
+  width: 100%;
+  max-width: 500px;
+  background: rgba(28, 28, 30, 0.95);
+  border-top: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding: 24px 20px calc(var(--safe-bottom) + 20px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: 0 -10px 40px rgba(0,0,0,0.6);
+  animation: modalSlideUp 0.35s var(--ease-spring);
+}
+
+@keyframes modalSlideUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+.calibration-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.calibration-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.calibration-title .cal-icon {
+  font-size: 26px;
+}
+
+.calibration-title h3 {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.calibration-title p {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.close-cal-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cal-section {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cal-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.step-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.step-btn:active {
+  transform: scale(0.92);
+}
+
+#cal-distance-slider {
+  flex: 1;
+  accent-color: var(--ios-accent);
+  cursor: pointer;
+  height: 6px;
+}
+
+.cal-dist-val {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ios-accent);
+  min-width: 60px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+
+.ref-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.ref-btn {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--radius-md);
+  padding: 10px 8px;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ref-btn:active, .ref-btn.selected {
+  background: rgba(255, 107, 53, 0.25);
+  border-color: var(--ios-accent);
+  box-shadow: 0 0 10px rgba(255, 107, 53, 0.3);
+}
+
+.ref-btn .ref-icon {
+  font-size: 20px;
+}
+
+.ref-btn span:not(.ref-icon) {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.ref-btn small {
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.calibration-footer {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.calibration-footer .demo-btn,
+.calibration-footer .start-btn {
+  flex: 1;
+  padding: 12px;
+  font-size: 14px;
+}

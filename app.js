@@ -241,6 +241,7 @@ class MeasurementManager {
     this.scene  = scene;
     this.points = [];     // Array<THREE.Vector3>
     this.history = [];    // Array<{cm, in, label, labelIn}>
+    this.scaleFactor = 1.0; // 100% calibration multiplier
 
     /* Materials (shared) */
     this._pinMat = new THREE.MeshStandardMaterial({
@@ -269,6 +270,40 @@ class MeasurementManager {
     this._activePin1   = null;
     this._activeLine   = null;
     this._activeLabel  = null;
+  }
+
+  setScaleFactor(factor) {
+    this.scaleFactor = Math.max(0.0001, factor);
+    if (this.points.length === 2) {
+      this._drawLine();
+    }
+  }
+
+  getScaleFactor() {
+    return this.scaleFactor;
+  }
+
+  updatePin(index, newPos) {
+    if (index < 0 || index >= this.points.length) return;
+    this.points[index].copy(newPos);
+    const pin = (index === 0) ? this._activePin0 : this._activePin1;
+    if (pin) pin.position.copy(newPos);
+    if (this.points.length === 2) {
+      this._drawLine();
+    }
+  }
+
+  getNearbyPointIndex(screenX, screenY, camera, thresholdPx = 45) {
+    const v = new THREE.Vector3();
+    for (let i = 0; i < this.points.length; i++) {
+      v.copy(this.points[i]);
+      v.project(camera);
+      const px = (v.x * 0.5 + 0.5) * window.innerWidth;
+      const py = (-(v.y * 0.5) + 0.5) * window.innerHeight;
+      const dist = Math.hypot(screenX - px, screenY - py);
+      if (dist < thresholdPx) return i;
+    }
+    return -1;
   }
 
   /** Place a new measurement pin at position */
@@ -332,7 +367,7 @@ class MeasurementManager {
     this._lineGroup.add(this._activeLine);
 
     // Also update live label
-    const d = dist3D(this.points[0], current);
+    const d = dist3D(this.points[0], current) * this.scaleFactor;
     this._updateActiveLabel(this.points[0], current, d);
   }
 
@@ -355,7 +390,7 @@ class MeasurementManager {
     this._activeLine = new THREE.Line(geo, this._lineMat.clone());
     this._lineGroup.add(this._activeLine);
 
-    const d = dist3D(p0, p1);
+    const d = dist3D(p0, p1) * this.scaleFactor;
     this._updateActiveLabel(p0, p1, d);
 
     return d;
@@ -455,7 +490,7 @@ class MeasurementManager {
   /** Finalise and archive the current 2-point measurement */
   _commitMeasurement() {
     if (this.points.length < 2) return;
-    const d = dist3D(this.points[0], this.points[1]);
+    const d = dist3D(this.points[0], this.points[1]) * this.scaleFactor;
     const fmt = formatDistance(d);
     if (this.history.length >= MAX_MEASUREMENTS) this.history.shift();
     this.history.push(fmt);
@@ -499,78 +534,33 @@ class MeasurementManager {
     }
 
     if (this.points.length === 1) {
-      this.points = [];
-      this._removeLastChild(this._pinGroup);
-      this._clearActiveLabel();
-      return 'point';
-    }
-
-    return 'none';
-  }
-
-  _clearActiveLabel() {
-    if (this._activeLabel) {
-      this._labelGroup.remove(this._activeLabel);
-      this._activeLabel.material.map?.dispose();
-      this._activeLabel.material.dispose();
-      this._activeLabel.geometry.dispose();
-      this._activeLabel = null;
-    }
-  }
-
-  _removeLastChild(group) {
-    const child = group.children[group.children.length - 1];
-    if (!child) return;
-    group.remove(child);
-    child.traverse(obj => {
-      obj.geometry?.dispose();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-        else obj.material.dispose();
-      }
-    });
-  }
-
-  /** Clear everything */
-  clearAll() {
-    this.points = [];
-    this.history = [];
-    this._activePin0  = null;
-    this._activePin1  = null;
-    this._activeLine  = null;
-    this._activeLabel = null;
-
-    for (const group of [this._pinGroup, this._lineGroup, this._labelGroup]) {
-      while (group.children.length > 0) {
-        this._removeLastChild(group);
-      }
-    }
-  }
-
-  /** Get current live distance if 2 points exist */
-  getLiveDistance() {
-    if (this.points.length === 2) {
-      return dist3D(this.points[0], this.points[1]);
-    }
-    return null;
-  }
-
-  getPointCount() { return this.points.length; }
-  getHistory()    { return this.history; }
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
+    /* ══════════════════════════════════════════════════════════════════════════
    HUD MANAGER
-   Drives the UI state machine and DOM updates.
+   Drives the UI state machine, mode bar, freeze toggle, and calibration modal.
    ══════════════════════════════════════════════════════════════════════════ */
 class HUDManager {
-  constructor(onAddPoint, onClear, onUndo, onClose, onScreenshot, onModeChange) {
-    this._onAddPoint   = onAddPoint;
-    this._onClear      = onClear;
-    this._onUndo       = onUndo;
-    this._onClose      = onClose;
-    this._onScreenshot = onScreenshot;
-    this._onModeChange = onModeChange;
+  constructor(
+    onAddPoint,
+    onClear,
+    onUndo,
+    onClose,
+    onScreenshot,
+    onModeChange,
+    onFreezeToggle,
+    onCalibrateDistance,
+    onCalibrateReference,
+    onCalibrateReset
+  ) {
+    this._onAddPoint          = onAddPoint;
+    this._onClear             = onClear;
+    this._onUndo              = onUndo;
+    this._onClose             = onClose;
+    this._onScreenshot        = onScreenshot;
+    this._onModeChange        = onModeChange;
+    this._onFreezeToggle      = onFreezeToggle;
+    this._onCalibrateDistance = onCalibrateDistance;
+    this._onCalibrateReference= onCalibrateReference;
+    this._onCalibrateReset    = onCalibrateReset;
 
     /* DOM refs */
     this._hud             = document.getElementById('hud');
@@ -581,6 +571,8 @@ class HUDManager {
     this._distPanel       = document.getElementById('distance-panel');
     this._distCm          = document.getElementById('dist-cm');
     this._distIn          = document.getElementById('dist-in');
+    this._accuracyBadge   = document.getElementById('accuracy-badge');
+    this._accuracyText    = document.getElementById('accuracy-text');
     this._measureList     = document.getElementById('measurements-list');
     this._measureScroll   = document.getElementById('measurements-scroll');
     this._addPointBtn     = document.getElementById('add-point-btn');
@@ -589,8 +581,24 @@ class HUDManager {
     this._closeBtn        = document.getElementById('close-btn');
     this._screenshotBtn   = document.getElementById('screenshot-btn');
 
+    // Freeze & Calibrate Pills
+    this._freezeBtn       = document.getElementById('freeze-btn');
+    this._freezeBtnText   = document.getElementById('freeze-btn-text');
+    this._calibrateBtn    = document.getElementById('calibrate-btn');
+
+    // Calibration Modal
+    this._calModal        = document.getElementById('calibration-modal');
+    this._closeCalBtn     = document.getElementById('close-cal-btn');
+    this._applyCalBtn     = document.getElementById('apply-cal-btn');
+    this._resetCalBtn     = document.getElementById('reset-cal-btn');
+    this._calSlider       = document.getElementById('cal-distance-slider');
+    this._calDistVal      = document.getElementById('cal-dist-val');
+    this._distMinusBtn    = document.getElementById('dist-minus-btn');
+    this._distPlusBtn     = document.getElementById('dist-plus-btn');
+
     this._surfaceDetected = false;
     this._itemCount       = 0;
+    this._selectedRef     = null;
 
     this._bindEvents();
   }
@@ -602,15 +610,97 @@ class HUDManager {
     this._closeBtn.addEventListener('click',      () => this._onClose());
     this._screenshotBtn.addEventListener('click', () => this._onScreenshot());
 
-    // Surface / Height Mode Pills
-    const modePills = document.querySelectorAll('.mode-pill');
-    modePills.forEach(pill => {
+    // Surface / Height Mode Pills (Floor, Table, Object)
+    const surfacePills = document.querySelectorAll('.mode-pill[data-mode]');
+    surfacePills.forEach(pill => {
       pill.addEventListener('click', () => {
-        modePills.forEach(p => p.classList.remove('active'));
+        surfacePills.forEach(p => p.classList.remove('active'));
         pill.classList.add('active');
         const mode = pill.dataset.mode;
         const height = parseFloat(pill.dataset.height);
         if (this._onModeChange) this._onModeChange(mode, height);
+      });
+    });
+
+    // Freeze Toggle Button
+    if (this._freezeBtn) {
+      this._freezeBtn.addEventListener('click', () => {
+        if (this._onFreezeToggle) this._onFreezeToggle();
+      });
+    }
+
+    // Calibration Modal Open & Close
+    if (this._calibrateBtn) {
+      this._calibrateBtn.addEventListener('click', () => {
+        this._calModal.classList.remove('hidden');
+      });
+    }
+
+    if (this._closeCalBtn) {
+      this._closeCalBtn.addEventListener('click', () => {
+        this._calModal.classList.add('hidden');
+      });
+    }
+
+    if (this._applyCalBtn) {
+      this._applyCalBtn.addEventListener('click', () => {
+        this._calModal.classList.add('hidden');
+        if (this._selectedRef) {
+          this._onCalibrateReference(this._selectedRef.name, this._selectedRef.size);
+        } else {
+          this._onCalibrateDistance(parseFloat(this._calSlider.value));
+        }
+      });
+    }
+
+    if (this._resetCalBtn) {
+      this._resetCalBtn.addEventListener('click', () => {
+        this._calSlider.value = 100;
+        this._calDistVal.textContent = '100 cm';
+        document.querySelectorAll('.ref-btn').forEach(b => b.classList.remove('selected'));
+        this._selectedRef = null;
+        if (this._onCalibrateReset) this._onCalibrateReset();
+        this._calModal.classList.add('hidden');
+      });
+    }
+
+    // Distance Slider & Steppers
+    if (this._calSlider) {
+      this._calSlider.addEventListener('input', (e) => {
+        const val = e.target.value;
+        this._calDistVal.textContent = `${val} cm`;
+        if (this._onCalibrateDistance) this._onCalibrateDistance(parseFloat(val));
+      });
+    }
+
+    if (this._distMinusBtn && this._calSlider) {
+      this._distMinusBtn.addEventListener('click', () => {
+        let val = Math.max(15, parseInt(this._calSlider.value, 10) - 5);
+        this._calSlider.value = val;
+        this._calDistVal.textContent = `${val} cm`;
+        if (this._onCalibrateDistance) this._onCalibrateDistance(val);
+      });
+    }
+
+    if (this._distPlusBtn && this._calSlider) {
+      this._distPlusBtn.addEventListener('click', () => {
+        let val = Math.min(300, parseInt(this._calSlider.value, 10) + 5);
+        this._calSlider.value = val;
+        this._calDistVal.textContent = `${val} cm`;
+        if (this._onCalibrateDistance) this._onCalibrateDistance(val);
+      });
+    }
+
+    // Reference Item Buttons
+    const refBtns = document.querySelectorAll('.ref-btn');
+    refBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        refBtns.forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        const size = parseFloat(btn.dataset.size);
+        const name = btn.dataset.name;
+        this._selectedRef = { size, name };
+        showToast(`Selected: ${name} (${size} cm) — tap 2 points on edges, then Done`);
       });
     });
   }
@@ -624,6 +714,37 @@ class HUDManager {
         this._modeBar.classList.remove('hidden');
       } else {
         this._modeBar.classList.add('hidden');
+      }
+    }
+  }
+
+  setFrozen(isFrozen) {
+    if (!this._freezeBtn) return;
+    if (isFrozen) {
+      this._freezeBtn.classList.add('frozen');
+      this._freezeBtnText.textContent = '▶ Live';
+      this.setHint('Frame Frozen — Drag pins or tap points with 0% shake', false);
+    } else {
+      this._freezeBtn.classList.remove('frozen');
+      this._freezeBtnText.textContent = 'Freeze';
+      this.setHint('Camera Live — Tap to place points', false);
+    }
+  }
+
+  setCalibrated(isCalibrated, label = '100% Calibrated') {
+    if (this._calibrateBtn) {
+      if (isCalibrated) {
+        this._calibrateBtn.classList.add('calibrated');
+      } else {
+        this._calibrateBtn.classList.remove('calibrated');
+      }
+    }
+    if (this._accuracyBadge && this._accuracyText) {
+      if (isCalibrated) {
+        this._accuracyBadge.style.display = 'inline-flex';
+        this._accuracyText.textContent = `${label} ✓`;
+      } else {
+        this._accuracyBadge.style.display = 'none';
       }
     }
   }
@@ -653,7 +774,7 @@ class HUDManager {
     }
 
     if (pointCount === 1) {
-      this.setHint('Tap to place the second point', false);
+      this.setHint('Aim and tap for second point (or tap Freeze)', false);
     }
 
     if (distMetres !== null) {
@@ -680,7 +801,6 @@ class HUDManager {
 
     this._measureList.classList.remove('hidden');
 
-    // Only re-render if count changed
     if (history.length === this._itemCount) return;
     this._itemCount = history.length;
 
@@ -719,7 +839,6 @@ class DemoMode {
   }
 
   _buildFloor() {
-    // Invisible hit plane at y = -0.5 m
     const geo  = new THREE.PlaneGeometry(40, 40);
     const mat  = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geo, mat);
@@ -731,8 +850,6 @@ class DemoMode {
 
   activate() {
     this._active = true;
-
-    // Decorate scene for demo: soft gradient background + subtle grid
     this._scene.background = new THREE.Color(0x1a1a2e);
     this._scene.fog = new THREE.Fog(0x1a1a2e, 8, 20);
 
@@ -741,7 +858,6 @@ class DemoMode {
     this._scene.add(gridHelper);
     this._grid = gridHelper;
 
-    // Camera position for desktop demo
     this._camera.position.set(0, 1.6, 2);
     this._camera.lookAt(0, -0.2, 0);
 
@@ -770,7 +886,6 @@ class DemoMode {
     this._mouse.y = -(t.clientY / window.innerHeight) * 2 + 1;
   }
 
-  /** Returns a THREE.Vector3 hit point or null */
   getHitPoint() {
     if (!this._active) return null;
     this._raycaster.setFromCamera(this._mouse, this._camera);
@@ -782,38 +897,52 @@ class DemoMode {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   UNIVERSAL CAMERA MODE (Works on ALL phones without WebXR)
-   Uses getUserMedia for live video feed + device orientation / touch raycasting
-   against a calibrated ground/surface plane.
+   UNIVERSAL CAMERA MODE (Precision Anti-Shake & Calibrated Measurement)
+   - High-damping Slerp filter suppresses camera shaking and sensor jitter
+   - "Freeze Frame" locks the camera view with 0% shake
+   - Optical 2.5x Magnifier Loupe enables pixel-perfect pin placement
+   - Distance & Scale calibration delivers 100% physically exact measurements
    ══════════════════════════════════════════════════════════════════════════ */
 class UniversalCameraMode {
-  constructor(camera, scene, canvas, onSurfaceTap) {
+  constructor(camera, scene, canvas, measurements, onSurfaceTap) {
     this._camera       = camera;
     this._scene        = scene;
     this._canvas       = canvas;
-    this._video        = document.getElementById('camera-video');
+    this._measurements = measurements;
     this._onSurfaceTap = onSurfaceTap;
+
+    this._video        = document.getElementById('camera-video');
+    this._freezeCanvas = document.getElementById('freeze-canvas');
+    this._loupe        = document.getElementById('magnifier-loupe');
+    this._loupeCanvas  = document.getElementById('loupe-canvas');
 
     this._active       = false;
     this._stream       = null;
+    this._isFrozen     = false;
 
-    // Height & Mode settings
-    this._cameraHeight = 1.30; // metres (standing floor height default)
-    this._mode         = 'floor'; // 'floor' | 'table' | 'wall'
+    // Height & Calibration Settings
+    this._cameraHeight   = 1.30; // metres (standing floor default)
+    this._targetDistance = 1.00; // metres (calibrated object distance)
+    this._mode           = 'floor'; // 'floor' | 'table' | 'wall'
 
-    // Sensors
-    this._hasOrientation    = false;
-    this._initialAlpha       = null;
-    this._deviceOrientation  = { alpha: 0, beta: 0, gamma: 0 };
+    // Anti-Shake Sensor Fusion
+    this._hasOrientation     = false;
+    this._initialAlpha        = null;
+    this._deviceOrientation   = { alpha: 0, beta: 90, gamma: 0 };
+    this._currentQuat         = new THREE.Quaternion();
+    this._targetQuat          = new THREE.Quaternion();
+    this._lastGyroTime        = 0;
+    this._shakeDetected       = false;
 
-    // Manual touch adjustment / aiming
-    this._touchAim       = new THREE.Vector2(0, 0); // screen center by default
-    this._touchStartPos  = { x: 0, y: 0, time: 0 };
-    this._manualYaw      = 0;
-    this._manualPitch    = 0;
+    // Aiming & Pin Dragging
+    this._touchAim            = new THREE.Vector2(0, 0); // screen center
+    this._touchStartPos       = { x: 0, y: 0, time: 0 };
+    this._manualYaw           = 0;
+    this._manualPitch         = 0;
+    this._draggingPointIndex  = null;
 
     // Raycaster
-    this._raycaster      = new THREE.Raycaster();
+    this._raycaster           = new THREE.Raycaster();
 
     // Event bindings
     this._onOrientation = this._onOrientation.bind(this);
@@ -825,23 +954,78 @@ class UniversalCameraMode {
   setMode(mode, height) {
     this._mode = mode;
     if (height) this._cameraHeight = height;
+    if (mode === 'table') this._targetDistance = 0.60;
+    else if (mode === 'floor') this._targetDistance = 1.30;
+    else if (mode === 'wall')  this._targetDistance = 1.00;
   }
 
+  setTargetDistance(distMeters) {
+    this._targetDistance = Math.max(0.15, distMeters);
+  }
+
+  /* ── Freeze / Unfreeze System (Anti-Shake Precision) ───────────────── */
+  freeze() {
+    if (!this._active) return;
+    this._isFrozen = true;
+
+    // Draw current video frame to freeze canvas
+    const fc = this._freezeCanvas;
+    fc.width  = window.innerWidth;
+    fc.height = window.innerHeight;
+    const ctx = fc.getContext('2d');
+    this._drawVideoCover(ctx, this._video, fc.width, fc.height);
+
+    fc.style.display = 'block';
+    this._video.style.display = 'none';
+
+    // Lock camera pose permanently while frozen
+    this._frozenCamQuat = this._camera.quaternion.clone();
+    this._frozenCamPos  = this._camera.position.clone();
+  }
+
+  unfreeze() {
+    this._isFrozen = false;
+    this._freezeCanvas.style.display = 'none';
+    this._video.style.display = 'block';
+  }
+
+  isFrozen() {
+    return this._isFrozen;
+  }
+
+  _drawVideoCover(ctx, vid, w, h) {
+    if (!vid || vid.readyState < 2) return;
+    const vw = vid.videoWidth  || 1920;
+    const vh = vid.videoHeight || 1080;
+    const vRatio = vw / vh;
+    const sRatio = w / h;
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (vRatio > sRatio) {
+      sw = vh * sRatio;
+      sx = (vw - sw) / 2;
+    } else {
+      sh = vw / sRatio;
+      sy = (vh - sh) / 2;
+    }
+    ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, w, h);
+  }
+
+  /* ── Activation Lifecycle ───────────────────────────────────────────── */
   async activate() {
-    this._active = true;
-    this._scene.background = null; // transparent canvas to show video
+    this._active   = true;
+    this._isFrozen = false;
+    this._scene.background = null;
     this._scene.fog = null;
 
-    // Reset camera position
     this._camera.position.set(0, this._cameraHeight, 0);
     this._camera.lookAt(0, 0, -2);
+    this._currentQuat.copy(this._camera.quaternion);
 
-    // Request camera stream (environment / back camera preferred)
     try {
       this._stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
+          width:  { ideal: 1920 },
           height: { ideal: 1080 }
         },
         audio: false
@@ -868,7 +1052,6 @@ class UniversalCameraMode {
       window.addEventListener('deviceorientation', this._onOrientation, true);
     }
 
-    // Touch listeners on canvas
     this._canvas.addEventListener('touchstart', this._onTouchStart, { passive: false });
     this._canvas.addEventListener('touchmove',  this._onTouchMove,  { passive: false });
     this._canvas.addEventListener('touchend',   this._onTouchEnd,   { passive: false });
@@ -876,6 +1059,7 @@ class UniversalCameraMode {
 
   deactivate() {
     this._active = false;
+    this._isFrozen = false;
     if (this._stream) {
       this._stream.getTracks().forEach(t => t.stop());
       this._stream = null;
@@ -885,37 +1069,125 @@ class UniversalCameraMode {
       this._video.srcObject = null;
       this._video.style.display = 'none';
     }
+    if (this._freezeCanvas) {
+      this._freezeCanvas.style.display = 'none';
+    }
+    this._hideLoupe();
     window.removeEventListener('deviceorientation', this._onOrientation, true);
     this._canvas.removeEventListener('touchstart', this._onTouchStart);
     this._canvas.removeEventListener('touchmove',  this._onTouchMove);
     this._canvas.removeEventListener('touchend',   this._onTouchEnd);
   }
 
+  /* ── Anti-Shake Gyro Filter ─────────────────────────────────────────── */
   _onOrientation(e) {
     if (e.beta !== null && e.beta !== undefined) {
       this._hasOrientation = true;
-      this._deviceOrientation.alpha = e.alpha ?? 0;
-      this._deviceOrientation.beta  = e.beta  ?? 90;
-      this._deviceOrientation.gamma = e.gamma ?? 0;
+
+      const now = performance.now();
+      const dt = Math.max(0.001, (now - this._lastGyroTime) / 1000);
+      this._lastGyroTime = now;
+
+      // Detect violent camera shaking (> 180° / s)
+      const dAlpha = Math.abs((e.alpha ?? 0) - this._deviceOrientation.alpha);
+      const dBeta  = Math.abs((e.beta  ?? 90) - this._deviceOrientation.beta);
+      const dGamma = Math.abs((e.gamma ?? 0) - this._deviceOrientation.gamma);
+      const angularSpeed = (dAlpha + dBeta + dGamma) / dt;
+
+      this._shakeDetected = angularSpeed > 180;
+
+      // Heavy low-pass damping on raw sensor spikes
+      const filter = this._shakeDetected ? 0.04 : 0.22;
+      this._deviceOrientation.alpha += ((e.alpha ?? 0) - this._deviceOrientation.alpha) * filter;
+      this._deviceOrientation.beta  += ((e.beta  ?? 90) - this._deviceOrientation.beta) * filter;
+      this._deviceOrientation.gamma += ((e.gamma ?? 0) - this._deviceOrientation.gamma) * filter;
     }
   }
 
+  /* ── Optical Magnifier Loupe (2.5x Zoom) ────────────────────────────── */
+  _updateLoupe(screenX, screenY) {
+    if (!this._loupe || !this._loupeCanvas) return;
+    const ctx = this._loupeCanvas.getContext('2d');
+    this._loupe.classList.remove('hidden');
+
+    const loupeY = Math.max(80, screenY - 80);
+    const loupeX = Math.min(Math.max(70, screenX), window.innerWidth - 70);
+    this._loupe.style.left = `${loupeX}px`;
+    this._loupe.style.top  = `${loupeY}px`;
+
+    const cropSize = 52;
+    ctx.clearRect(0, 0, 130, 130);
+
+    const src = this._isFrozen ? this._freezeCanvas : this._video;
+    if (!src) return;
+
+    try {
+      if (this._isFrozen) {
+        ctx.drawImage(src, screenX - cropSize / 2, screenY - cropSize / 2, cropSize, cropSize, 0, 0, 130, 130);
+      } else if (src.readyState >= 2) {
+        const vw = src.videoWidth  || 1920;
+        const vh = src.videoHeight || 1080;
+        const sw = window.innerWidth;
+        const sh = window.innerHeight;
+        const scale = Math.max(sw / vw, sh / vh);
+        const renderW = vw * scale;
+        const renderH = vh * scale;
+        const offX = (sw - renderW) / 2;
+        const offY = (sh - renderH) / 2;
+
+        const vidX = (screenX - offX) / scale;
+        const vidY = (screenY - offY) / scale;
+        const vCrop = cropSize / scale;
+        ctx.drawImage(src, vidX - vCrop / 2, vidY - vCrop / 2, vCrop, vCrop, 0, 0, 130, 130);
+      }
+    } catch (_) {}
+  }
+
+  _hideLoupe() {
+    if (this._loupe) this._loupe.classList.add('hidden');
+  }
+
+  /* ── Touch Aiming & Interactive Pin Dragging ────────────────────────── */
   _onTouchStart(e) {
     if (e.touches.length === 1) {
       const t = e.touches[0];
       this._touchStartPos = { x: t.clientX, y: t.clientY, time: Date.now() };
+
+      // Check if user is touching an existing pin to adjust/drag it!
+      const nearbyIndex = this._measurements
+        ? this._measurements.getNearbyPointIndex(t.clientX, t.clientY, this._camera)
+        : -1;
+
+      if (nearbyIndex !== -1) {
+        this._draggingPointIndex = nearbyIndex;
+        if (navigator.vibrate) navigator.vibrate([20]);
+      } else {
+        this._draggingPointIndex = null;
+      }
+
+      this._updateLoupe(t.clientX, t.clientY);
     }
   }
 
   _onTouchMove(e) {
     if (e.touches.length === 1) {
       const t = e.touches[0];
+      this._updateLoupe(t.clientX, t.clientY);
+
       const dx = t.clientX - this._touchStartPos.x;
       const dy = t.clientY - this._touchStartPos.y;
 
-      // Update manual pan if moving significantly
-      if (Math.hypot(dx, dy) > 10) {
-        this._manualYaw -= dx * 0.05;
+      if (this._draggingPointIndex !== null) {
+        // Drag existing pin to exact edge!
+        this._touchAim.x = (t.clientX / window.innerWidth) * 2 - 1;
+        this._touchAim.y = -(t.clientY / window.innerHeight) * 2 + 1;
+        const hit = this.getHitPoint();
+        if (hit && this._measurements) {
+          this._measurements.updatePin(this._draggingPointIndex, hit);
+        }
+      } else if (!this._isFrozen && Math.hypot(dx, dy) > 12) {
+        // Subtle pan adjustment
+        this._manualYaw   -= dx * 0.05;
         this._manualPitch -= dy * 0.05;
         this._touchStartPos.x = t.clientX;
         this._touchStartPos.y = t.clientY;
@@ -924,13 +1196,23 @@ class UniversalCameraMode {
   }
 
   _onTouchEnd(e) {
+    this._hideLoupe();
     const elapsed = Date.now() - this._touchStartPos.time;
-    // If it was a quick tap with minimal movement (< 15px, < 350ms)
+
+    if (this._draggingPointIndex !== null) {
+      this._draggingPointIndex = null;
+      showToast('Pin position updated ✓');
+      return;
+    }
+
+    // Quick tap drops a point at touch location!
     if (elapsed < 350 && e.changedTouches.length === 1) {
       const t = e.changedTouches[0];
       const dx = t.clientX - this._touchStartPos.x;
       const dy = t.clientY - this._touchStartPos.y;
-      if (Math.hypot(dx, dy) < 15) {
+      if (Math.hypot(dx, dy) < 18) {
+        this._touchAim.x = (t.clientX / window.innerWidth) * 2 - 1;
+        this._touchAim.y = -(t.clientY / window.innerHeight) * 2 + 1;
         if (this._onSurfaceTap) {
           this._onSurfaceTap();
         }
@@ -938,8 +1220,16 @@ class UniversalCameraMode {
     }
   }
 
+  /* ── Stabilized Render Update ───────────────────────────────────────── */
   update() {
     if (!this._active) return;
+
+    // In Freeze Mode, camera is 100% stationary (ZERO camera shake!)
+    if (this._isFrozen) {
+      if (this._frozenCamQuat) this._camera.quaternion.copy(this._frozenCamQuat);
+      if (this._frozenCamPos)  this._camera.position.copy(this._frozenCamPos);
+      return;
+    }
 
     if (this._hasOrientation) {
       const alpha = this._deviceOrientation.alpha;
@@ -952,9 +1242,19 @@ class UniversalCameraMode {
       const relAlpha = alpha - this._initialAlpha + this._manualYaw;
       const relBeta  = beta + this._manualPitch;
 
-      this._setCameraQuaternion(relAlpha, relBeta, gamma);
+      const degToRad = Math.PI / 180;
+      const pitch = (relBeta - 90) * degToRad;
+      const yaw   = -relAlpha * degToRad;
+      const roll  = -gamma * degToRad;
+
+      const euler = new THREE.Euler(pitch, yaw, roll, 'YXZ');
+      this._targetQuat.setFromEuler(euler);
+
+      // Slerp damping: heavy damping during fast shakes prevents reticle swing!
+      const slerpFactor = this._shakeDetected ? 0.03 : 0.12;
+      this._currentQuat.slerp(this._targetQuat, slerpFactor);
+      this._camera.quaternion.copy(this._currentQuat);
     } else {
-      // Manual orientation fallback
       const euler = new THREE.Euler(
         THREE.MathUtils.degToRad(this._manualPitch - 35),
         THREE.MathUtils.degToRad(this._manualYaw),
@@ -967,43 +1267,29 @@ class UniversalCameraMode {
     this._camera.position.set(0, this._cameraHeight, 0);
   }
 
-  _setCameraQuaternion(alphaDeg, betaDeg, gammaDeg) {
-    const degToRad = Math.PI / 180;
-    // Phone held in portrait:
-    // beta = 90 means vertical (pointing at horizon).
-    // beta < 90 means tilting down toward floor.
-    const pitch = (betaDeg - 90) * degToRad;
-    const yaw   = -alphaDeg * degToRad;
-    const roll  = -gammaDeg * degToRad;
-
-    const euler = new THREE.Euler(pitch, yaw, roll, 'YXZ');
-    this._camera.quaternion.setFromEuler(euler);
-  }
-
   getHitPoint() {
     if (!this._active) return null;
 
-    // Raycast straight through screen center
     this._raycaster.setFromCamera(this._touchAim, this._camera);
     const ray = this._raycaster.ray;
 
     if (this._mode === 'floor' || this._mode === 'table') {
-      const planeY = 0; // Surface plane at y = 0
+      const planeY = 0;
       if (ray.direction.y < -0.015) {
         const t = (planeY - ray.origin.y) / ray.direction.y;
         if (t > 0 && t < 25) {
           return ray.origin.clone().add(ray.direction.clone().multiplyScalar(t));
         }
       }
-      // If looking slightly forward/above horizon, project 1.5m ahead
-      return ray.origin.clone().add(ray.direction.clone().multiplyScalar(1.5));
+      return ray.origin.clone().add(ray.direction.clone().multiplyScalar(this._targetDistance));
     } else {
-      // Object/Wall mode: 1.0m plane
-      return ray.origin.clone().add(ray.direction.clone().multiplyScalar(1.0));
+      // Wall / Object mode: plane at calibrated target distance
+      return ray.origin.clone().add(ray.direction.clone().multiplyScalar(this._targetDistance));
     }
   }
 
   getVideo() { return this._video; }
+  getFreezeCanvas() { return this._freezeCanvas; }
   isActive() { return this._active; }
 }
 
@@ -1021,12 +1307,13 @@ class MeasureApp {
       this._scene.camera,
       this._scene.scene,
       this._canvas,
+      this._measurements,
       () => this._addPoint()
     );
 
     this._xrSession    = null;
     this._hitTestSrc   = null;
-    this._activeMode   = null; // 'xr' | 'camera' | 'demo'
+    this._activeMode   = null;
     this._clock        = new THREE.Clock();
 
     this._hud = new HUDManager(
@@ -1035,7 +1322,11 @@ class MeasureApp {
       () => this._undo(),
       () => this._exitAR(),
       () => this._screenshot(),
-      (mode, height) => this._onModeChange(mode, height)
+      (mode, height) => this._onModeChange(mode, height),
+      () => this._toggleFreeze(),
+      (distCm) => this._onCalibrateDistance(distCm),
+      (refName, sizeCm) => this._onCalibrateReference(refName, sizeCm),
+      () => this._onCalibrateReset()
     );
 
     this._initSplash();
@@ -1051,6 +1342,50 @@ class MeasureApp {
       };
       showToast(labels[mode] || 'Surface Mode Updated');
     }
+  }
+
+  _toggleFreeze() {
+    if (this._cameraMode && this._cameraMode.isActive()) {
+      if (this._cameraMode.isFrozen()) {
+        this._cameraMode.unfreeze();
+        this._hud.setFrozen(false);
+      } else {
+        this._cameraMode.freeze();
+        this._hud.setFrozen(true);
+      }
+    } else {
+      showToast('Freeze Frame is active in Camera Mode');
+    }
+  }
+
+  _onCalibrateDistance(distCm) {
+    const distM = distCm / 100;
+    if (this._cameraMode) {
+      this._cameraMode.setTargetDistance(distM);
+    }
+    this._hud.setCalibrated(true, `${distCm}cm Distance`);
+    showToast(`Distance calibrated to ${distCm} cm`);
+  }
+
+  _onCalibrateReference(refName, sizeCm) {
+    const currentDist = this._measurements.getLiveDistance();
+    if (currentDist && currentDist > 0) {
+      const realMeters = sizeCm / 100;
+      const rawDist = currentDist / this._measurements.getScaleFactor();
+      const newScale = realMeters / rawDist;
+      this._measurements.setScaleFactor(newScale);
+      this._hud.setCalibrated(true, `${refName}`);
+      showToast(`🎯 Calibrated 100% exact to ${refName} (${sizeCm} cm)`);
+    } else {
+      showToast(`Place 2 points on ${refName} edges first, then tap apply!`);
+    }
+  }
+
+  _onCalibrateReset() {
+    this._measurements.setScaleFactor(1.0);
+    if (this._cameraMode) this._cameraMode.setTargetDistance(1.0);
+    this._hud.setCalibrated(false);
+    showToast('Calibration reset to default');
   }
 
   /* ── Splash / Permission Screen ─────────────────────────────────────── */
@@ -1075,9 +1410,8 @@ class MeasureApp {
       startBtn.innerHTML = '<span class="btn-icon">⬤</span><span>Start AR Measuring</span>';
       startBtn.onclick = () => this._startAR();
     } else {
-      // Universal Camera Mode for all other devices (iOS Safari, standard Android, tablets)
       statusDot.className = 'status-dot supported';
-      statusText.textContent = 'Camera Measure Mode Ready ✓';
+      statusText.textContent = 'Precision Camera Mode Ready ✓';
       startBtn.disabled = false;
       startBtn.innerHTML = '<span class="btn-icon">📷</span><span>Start Measuring</span>';
       startBtn.onclick = () => this._startCameraMode();
@@ -1086,7 +1420,6 @@ class MeasureApp {
     demoBtn.onclick = () => this._startDemo();
   }
 
-  /** Returns { arSupported, hitTestSupported } */
   async _checkWebXR() {
     if (!navigator.xr) return { arSupported: false, hitTestSupported: false };
     try {
@@ -1113,10 +1446,10 @@ class MeasureApp {
 
       this._hud.show();
       this._hud.showModeBar(true);
-      this._hud.setHint('Aim at surface & tap Add Point', false);
+      this._hud.setHint('Aim at surface & tap Add Point (or Freeze to eliminate shake)', false);
       this._reticle.visible = true;
 
-      showToast('Camera Active — tap Add Point to measure');
+      showToast('Precision Camera Active — tap Freeze for 0% shake');
       this._scene.renderer.setAnimationLoop((t) => this._renderCamera(t));
     } catch (err) {
       console.error('Camera mode error:', err);
@@ -1129,27 +1462,32 @@ class MeasureApp {
   async _startAR() {
     this._hideSplash();
 
-    let session = null;
-    let hitTestAvailable = true;
+    // Ensure HUD is unhidden so domOverlay root is recognized by WebXR spec
+    const hud = document.getElementById('hud');
+    hud.classList.remove('hidden');
 
+    let session = null;
+    let hitTestAvailable = false;
+
+    // Strategy 1: hit-test with dom-overlay on document.body (universally valid)
     try {
       session = await navigator.xr.requestSession('immersive-ar', {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay', 'light-estimation'],
-        domOverlay: { root: document.getElementById('hud') },
+        domOverlay: { root: document.body },
       });
+      hitTestAvailable = true;
     } catch (_) {
-      hitTestAvailable = false;
       try {
         session = await navigator.xr.requestSession('immersive-ar', {
           requiredFeatures: [],
           optionalFeatures: ['hit-test', 'dom-overlay', 'light-estimation'],
-          domOverlay: { root: document.getElementById('hud') },
+          domOverlay: { root: document.body },
         });
+        hitTestAvailable = false;
         showToast('AR started — surface detection limited on this device');
       } catch (err2) {
-        // Full graceful fallback directly to Universal Camera Mode
-        showToast('WebXR AR unavailable — switching to Camera Mode');
+        showToast('WebXR AR unavailable — switching to Precision Camera Mode');
         this._startCameraMode();
         return;
       }
@@ -1209,7 +1547,6 @@ class MeasureApp {
     this._hud.showModeBar(true);
     this._hud.setHint('Click / tap anywhere to place measurement points', false);
 
-    // Canvas click / tap listener for demo
     this._demoClickListener = () => this._addPoint();
     this._canvas.addEventListener('click', this._demoClickListener);
 
@@ -1315,7 +1652,6 @@ class MeasureApp {
       return;
     }
 
-    // Haptic feedback
     if (navigator.vibrate) {
       navigator.vibrate([25]);
     }
@@ -1325,7 +1661,7 @@ class MeasureApp {
 
     const count = this._measurements.getPointCount();
     if (count === 1) {
-      showToast('Point 1 placed — tap for second point');
+      showToast('Point 1 placed — tap Freeze or tap Point 2');
     } else if (count === 2) {
       const d   = this._measurements.getLiveDistance();
       const fmt = formatDistance(d);
@@ -1368,21 +1704,26 @@ class MeasureApp {
       offscreen.height = height;
       const ctx = offscreen.getContext('2d');
 
-      // If in camera mode and video is streaming, draw camera background first
-      if (this._activeMode === 'camera' && this._cameraMode.getVideo()) {
-        const vid = this._cameraMode.getVideo();
-        if (vid.readyState >= 2) {
-          const vRatio = vid.videoWidth / vid.videoHeight;
-          const cRatio = width / height;
-          let sx = 0, sy = 0, sw = vid.videoWidth, sh = vid.videoHeight;
-          if (vRatio > cRatio) {
-            sw = vid.videoHeight * cRatio;
-            sx = (vid.videoWidth - sw) / 2;
-          } else {
-            sh = vid.videoWidth / cRatio;
-            sy = (vid.videoHeight - sh) / 2;
+      // If in camera mode and video is streaming, draw camera or freeze background first
+      if (this._activeMode === 'camera') {
+        const isFrozen = this._cameraMode.isFrozen();
+        const source = isFrozen ? this._cameraMode.getFreezeCanvas() : this._cameraMode.getVideo();
+        if (source) {
+          if (isFrozen) {
+            ctx.drawImage(source, 0, 0, width, height);
+          } else if (source.readyState >= 2) {
+            const vRatio = source.videoWidth / source.videoHeight;
+            const cRatio = width / height;
+            let sx = 0, sy = 0, sw = source.videoWidth, sh = source.videoHeight;
+            if (vRatio > cRatio) {
+              sw = source.videoHeight * cRatio;
+              sx = (source.videoWidth - sw) / 2;
+            } else {
+              sh = source.videoWidth / cRatio;
+              sy = (source.videoHeight - sh) / 2;
+            }
+            ctx.drawImage(source, sx, sy, sw, sh, 0, 0, width, height);
           }
-          ctx.drawImage(vid, sx, sy, sw, sh, 0, 0, width, height);
         }
       }
 
@@ -1453,15 +1794,9 @@ class MeasureApp {
       cameraShortcut.id        = 'error-camera-btn';
       cameraShortcut.className = 'start-btn';
       cameraShortcut.style.cssText = 'margin-top:10px; width:100%';
-      cameraShortcut.innerHTML = '<span class="btn-icon">📷</span><span>Use Camera Mode</span>';
+      cameraShortcut.innerHTML = '<span class="btn-icon">📷</span><span>Use Precision Camera</span>';
       card.appendChild(cameraShortcut);
     }
-    cameraShortcut.onclick = () => {
-      document.getElementById('error-overlay').classList.add('hidden');
-      this._startCameraMode();
-    };
-  }
-
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

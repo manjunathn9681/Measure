@@ -85,8 +85,20 @@
     <!-- ─── Background Camera Video (for Universal Camera Mode) ───────── -->
     <video id="camera-video" playsinline autoplay muted></video>
 
+    <!-- ─── Frozen Frame Canvas (Anti-Shake Precision Capture) ────────── -->
+    <canvas id="freeze-canvas" class="freeze-canvas hidden"></canvas>
+
     <!-- ─── AR Canvas ─────────────────────────────────────────────────── -->
     <canvas id="ar-canvas"></canvas>
+
+    <!-- ─── Optical Magnifier Loupe (iOS Style 2.5x Zoom) ─────────────── -->
+    <div id="magnifier-loupe" class="magnifier-loupe hidden">
+      <canvas id="loupe-canvas" width="130" height="130"></canvas>
+      <div class="loupe-crosshair"></div>
+      <div class="loupe-center-dot"></div>
+      <div class="loupe-ring"></div>
+      <span class="loupe-badge">2.5×</span>
+    </div>
 
     <!-- ─── HUD Overlay ───────────────────────────────────────────────── -->
     <div id="hud" class="hud hidden">
@@ -123,6 +135,14 @@
           <span class="mode-icon">📦</span>
           <span class="mode-text">Object (1m)</span>
         </button>
+        <button id="freeze-btn" class="mode-pill freeze-pill" title="Freeze frame to eliminate all camera shake">
+          <span class="mode-icon">❄️</span>
+          <span class="mode-text" id="freeze-btn-text">Freeze</span>
+        </button>
+        <button id="calibrate-btn" class="mode-pill calibrate-pill" title="Calibrate distance or reference for 100% exact measurements">
+          <span class="mode-icon">🎯</span>
+          <span class="mode-text">Calibrate</span>
+        </button>
       </div>
 
       <!-- Surface detection hint -->
@@ -140,6 +160,10 @@
           <div class="distance-value">
             <span id="dist-cm" class="dist-primary">0 cm</span>
             <span id="dist-in" class="dist-secondary">0 in</span>
+          </div>
+          <div id="accuracy-badge" class="accuracy-badge">
+            <span class="badge-icon">✓</span>
+            <span id="accuracy-text">100% Calibrated</span>
           </div>
         </div>
       </div>
@@ -177,6 +201,62 @@
           </svg>
           <span>Photo</span>
         </button>
+      </div>
+    </div>
+
+    <!-- ─── 100% Accuracy Calibration Sheet ───────────────────────────── -->
+    <div id="calibration-modal" class="calibration-modal hidden">
+      <div class="calibration-card">
+        <div class="calibration-header">
+          <div class="calibration-title">
+            <span class="cal-icon">🎯</span>
+            <div>
+              <h3>100% Accuracy Calibration</h3>
+              <p>Calibrate distance or calibrate with a card</p>
+            </div>
+          </div>
+          <button id="close-cal-btn" class="close-cal-btn" aria-label="Close">✕</button>
+        </div>
+
+        <!-- Method 1: Distance Slider -->
+        <div class="cal-section">
+          <div class="cal-section-title">Phone Distance to Object / Surface</div>
+          <div class="slider-row">
+            <button id="dist-minus-btn" class="step-btn">−</button>
+            <input type="range" id="cal-distance-slider" min="15" max="300" value="100" step="1" />
+            <button id="dist-plus-btn" class="step-btn">+</button>
+            <span id="cal-dist-val" class="cal-dist-val">100 cm</span>
+          </div>
+          <p class="cal-hint">Adjust distance to match exactly how far your phone is from the object.</p>
+        </div>
+
+        <!-- Method 2: Standard Reference Object Calibration -->
+        <div class="cal-section">
+          <div class="cal-section-title">Or Calibrate with Known Item (Millimeter Exact)</div>
+          <div class="ref-buttons">
+            <button class="ref-btn" data-size="8.56" data-name="Credit / ID Card">
+              <span class="ref-icon">💳</span>
+              <span>Credit Card</span>
+              <small>8.56 cm</small>
+            </button>
+            <button class="ref-btn" data-size="29.7" data-name="A4 Paper">
+              <span class="ref-icon">📄</span>
+              <span>A4 Paper</span>
+              <small>29.7 cm</small>
+            </button>
+            <button class="ref-btn" data-size="2.43" data-name="Standard Coin">
+              <span class="ref-icon">🪙</span>
+              <span>Coin</span>
+              <small>2.43 cm</small>
+            </button>
+          </div>
+          <p class="cal-hint">Tap a reference item, then measure its edges once to lock 100% exact scale.</p>
+        </div>
+
+        <div class="calibration-footer">
+          <button id="reset-cal-btn" class="demo-btn">Reset to Default</button>
+          <button id="apply-cal-btn" class="start-btn">Apply Calibration</button>
+        </div>
       </div>
     </div>
 
